@@ -1,0 +1,367 @@
+---
+title: 'Project 2: Data Mining, Classification, Prediction'
+author: "SDS322E"
+date: '12/10/21'
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  pdf_document:
+    toc: no
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, fig.align = "center", warning = F, message = F,
+tidy=TRUE, tidy.opts=list(width.cutoff=60), R.options=list(max.print=100))
+
+class_diag <- function(score, truth, positive, cutoff=.5){
+
+  pred <- factor(score>cutoff,levels=c("TRUE","FALSE"))
+  truth <- factor(truth==positive, levels=c("TRUE","FALSE"))
+
+  tab<-table(truth, pred)
+  acc=sum(diag(tab))/sum(tab)
+  sens=tab[1,1]/rowSums(tab)[1]
+  spec=tab[2,2]/rowSums(tab)[2]
+  ppv=tab[1,1]/colSums(tab)[1]
+
+#CALCULATE F1
+  f1=2*(sens*ppv)/(sens+ppv)
+  
+#CALCULATE EXACT AUC
+  truth<-as.numeric(truth=="TRUE")
+  ord<-order(score, decreasing=TRUE)
+  score <- score[ord]; truth <- truth[ord]
+  TPR=cumsum(truth)/max(1,sum(truth))
+  FPR=cumsum(!truth)/max(1,sum(!truth))
+  dup<-c(score[-1]>=score[-length(score)], FALSE)
+  TPR<-c(0,TPR[!dup],1); FPR<-c(0,FPR[!dup],1)
+  n <- length(TPR)
+  auc<- sum( ((TPR[-1]+TPR[-n])/2) * (FPR[-1]-FPR[-n]) )
+  round(data.frame(acc,sens,spec,ppv,f1,ba=(sens+spec)/2,auc, row.names = "Metrics"),4)
+}
+```
+
+# Mining, Classification, Prediction
+
+## Nikhil Gumma nrg 792 
+
+### Introduction 
+
+Paragraph or two introducing your datasets and variables, why they are interesting to you, etc. See instructions for more information
+
+My love for movies has been there for a very long time. I have always been an avid moviegoer ever since I was a kid. I always loved the experience of being surrounded by random people and escaping reality for a few hours. My family used to look forward to movies but, with Netflix on the rise, our weekly plans have shifted to staying at home and watching a new movie on our television. My datasets were regarding movies and tv shows and I specifically looked for datasets with public ratings as a factor to compare data. One on my data sets was Netflix Original Movies and the other was IMDbRatings for non Netflix movies. My dataset includes both categorical and binary variables. During the pandemic, theaters have seen a steep decline and it seems like the public isn’t in any hurry to go back to the theaters. I wanted to see if the content being produced by Netflix is better than the movies being released in the theaters. My goal is to compare Netflix original movies versus the recent theatrical releases based on their IMDb ratings. Since we are combining 2 datasets, we don't want overlap in the common films so we can differentiate between Netflix originals and non Netflix movies. There are a total of 21 variables and 5300 unique ID observations. I mainly focus on the categorical variable "Language" and the numeric variable "IMDb Rating" in this project.
+
+```{R}
+library(tidyverse)
+# read your datasets in here, e.g., with read_csv()
+data1 <- read.csv("~/project1/IMDbRatings.csv")
+data2 <- read.csv("~/project1/NetflixOriginalsRatings.csv")
+data1
+data2
+mdata2 <- data2 %>% mutate(Name = tolower(Genre))
+mdata1 <- data1 %>% select(-modified)
+mdata1 <- data1 %>% rename ('Genre'="Genres")
+mdata1 <- data1 %>% rename ('Runtime'="Runtime..mins.")
+mdata2<- data2
+
+# if your dataset needs tidying, do so here
+# your joining code
+mdatajoined <- mdata1 %>% full_join(mdata2, by="IMDb.Rating")
+moviejoin <- mdatajoined
+# of rows in dataset 1 509
+mdata1_rows <- nrow(mdata1)
+mdata1_rows
+# of rows in dataset 2 584
+mdata2_rows <- nrow(mdata2)
+mdata2_rows
+# Number of unique ids in dataset1 509
+mdata1_uniqueIds <- mdata1 %>% summarize_all(n_distinct) %>% 
+    select(position)
+mdata1_uniqueIds
+# Number of unique ids in dataset2 584
+mdata2_uniqueIds <- mdata2 %>% summarize_all(n_distinct) %>% 
+    select(Title)
+mdata2_uniqueIds
+#Number of movies in first dataset but not other
+setdiff(mdata1$Title, mdata2$Title)
+
+setdiff(mdata2$Title, mdata1$Title)
+# Number of rows in merged dataset 3238
+moviejoined_nrow <- nrow(moviejoin)
+moviejoined_nrow
+# Number of rows dropped in merged dataset
+num_rows_dropped <- nrow(mdata1) + nrow(mdata2) - nrow(moviejoin)
+
+# any other code here
+moviejoin <- moviejoin %>% select(-modified) %>% select (-description)
+moviejoin <- moviejoin %>% na.omit 
+
+
+
+
+EnglishorNot <- function(LangVec) {
+    LanguageBinary <- vector()
+    LanguageCheck <- c("English")
+    for (Language in LangVec) {
+        if (Language %in% LanguageCheck) {
+            LanguageBinary <- c(LanguageBinary, 1)
+        } else {
+            LanguageBinary <- c(LanguageBinary, 0)
+        }
+    }
+    return(LanguageBinary)
+}
+moviejoin <- moviejoin %>% mutate(EnglishorNot = EnglishorNot(Language))
+```
+
+### Cluster Analysis
+
+```{R}
+library(cluster)
+# clustering code here
+
+clust_dat <- moviejoin %>% select( Num..Votes, You.rated,
+    Runtime.x )
+
+sil_width <- vector()
+
+for (i in 2:10) {
+    kms <- kmeans(clust_dat, centers = i)
+    sil <- silhouette(kms$cluster, dist(clust_dat))
+    sil_width[i] <- mean(sil[, 3])
+}
+
+ggplot() + geom_line(aes(x = 1:10, y = sil_width)) + scale_x_continuous(name = "k", 
+    breaks = 1:10)
+
+pam <- clust_dat %>% pam(k = 2)
+pam
+
+pam$silinfo$avg.width
+
+library(GGally)
+clust_dat <- clust_dat %>% ungroup %>% mutate(cluster = as.factor(pam$clustering))
+
+ggpairs(clust_dat, aes(color = cluster))
+
+```
+
+Discussion of clustering here
+
+The variables that we looked at for this cluster were Num..Votes, You.rated,and Runtime. Based on the average silhouette length we chose to use a value of 2 for the number of clusters used. If we look at both the clusteres there seems to very very few differences in their values. We can see that the Red cluster seems to have a higer Num..Votes value were as the You.Rated and Runtime values are very similar. This could mean the the red cluster is representing the number of votes where as the blue cluster is representing the runtime of the movies. There seems to be a very big overlap in the individual ratings (You Rated) and the Runtime of the clusters. This result makes sense since the values for those variables are relativity consistent as seen in project 1. The average silhouette width suggestes that we need an average of 0.56. This value suggests that a reasonable structure was identified.
+    
+### Dimensionality Reduction with PCA
+
+```{R}
+# PCA code here
+
+PCAMoviejoin <- moviejoin %>% select(IMDb.Rating, Num..Votes,
+    Runtime.x)
+
+pcaMovieData <- princomp(PCAMoviejoin, cor = T)
+scaledability <- data.frame(scale(PCAMoviejoin))
+summary(pcaMovieData, loadings = "T") 
+
+matrix <- pcaMovieData$scores
+matrix <- matrix %>% as.data.frame() %>% mutate(Num..Votes = PCAMoviejoin$Num..Votes)
+ggplot(matrix, aes(Comp.1, Comp.2)) + geom_point(aes(color = Num..Votes))
+
+cor (PCAMoviejoin$Num..Votes, matrix$Comp.1)
+```
+
+Discussions of PCA here. 
+
+We keep the first 2 PCS account for over 82% of the variance. The highest variability among the three variables at 0.547514 is PC1. This would mean that if someone scores high on PC1 then they might score high on all three of the variables due to PC1 having all positive values for the three variables. A low score on PC1 could result in a low score for all three of the variables. PC2 has a low variability at  0.281 which would mean that a high PC2 score would score high on high only on Num..Votes and low on the other two variables. A low PC2 score would result in a low Num..Votes score and and high on the other two variables. 
+
+###  Linear Classifier
+
+```{R}
+# linear classifier code here
+
+log_fit <- glm(EnglishorNot ~ Runtime.x + Runtime.y + 
+    Num..Votes + You.rated + Year + IMDb.Rating, 
+    data = moviejoin, family = "binomial")
+
+prob_reg <- predict(log_fit)
+
+class_diag(prob_reg, moviejoin$EnglishorNot, positive = 1)
+
+```
+
+```{R}
+# cross-validation of linear classifier here
+
+
+set.seed(400)
+k = 10
+
+data <- sample_frac(moviejoin) 
+folds <- rep(1:k, length.out = nrow(data)) 
+
+diags <- NULL
+
+i = 1
+for (i in 1:k) {
+  
+    train <- data[folds != i, ]
+    test <- data[folds == i, ]
+    truth <- test$EnglishorNot
+    
+
+    fit <- glm(EnglishorNot ~ Runtime.x + Runtime.y + 
+    Num..Votes + You.rated + Year + IMDb.Rating, 
+    data = train, family = "binomial")
+    
+
+    probs <- predict(fit, test)  ### GET PREDICTIONS FROM THE TRAINED MODEL ON THE TEST SET HERE
+    
+  
+    diags <- rbind(diags, class_diag(probs, truth, positive = 1))
+}
+
+summarize_all(diags, mean)
+
+```
+
+Discussion here
+
+The AUC for the logistic regression is 0.6023 whereas the 10-fold CV is 0.59888. This would lead us to beleive that the linear regression model is doing a better job predicting new observations The 10-fold CV might be overfitting due to the AUC being a smaller value.
+
+### Non-Parametric Classifier
+
+```{R}
+library(caret)
+# non-parametric classifier code here
+
+
+knn_fit <- knn3(EnglishorNot ~ Runtime.x + Runtime.y + 
+    Num..Votes + You.rated + Year + IMDb.Rating, 
+    data = moviejoin)
+
+prob_knn <- predict(knn_fit, moviejoin)
+
+class_diag(prob_knn[, 2], moviejoin$EnglishorNot, positive = 1)
+
+
+```
+
+```{R}
+# cross-validation of np classifier here
+
+
+set.seed(400)
+k = 10
+
+data <- sample_frac(moviejoin)
+folds <- rep(1:k, length.out = nrow(data))
+
+diags <- NULL
+
+i = 1
+for (i in 1:k) {
+    
+    train <- data[folds != i, ]
+    test <- data[folds == i, ]
+    truth <- test$EnglishorNot
+    
+    fit <- knn3(EnglishorNot ~ Runtime.x + Runtime.y + 
+    Num..Votes + You.rated + Year + IMDb.Rating, 
+    data = train)
+    
+    probs <- predict(fit, newdata = test)[, 2]
+    
+    diags <- rbind(diags, class_diag(probs, truth, positive = 1))
+}
+
+summarize_all(diags, mean)
+
+```
+
+Discussion
+The KNN shows an AUC value of 0.7782 while the 10CV has an AUC of 0.50735. This suggests the KNN did a slightly better job than the 10CV. THe 10CV model shows signs of overfitting from since the AUC value (0.50735) is significantly smaller.
+
+### Regression/Numeric Prediction
+
+```{R}
+# regression model code here
+
+fit <- lm(IMDb.Rating ~ Runtime.x + Runtime.y + 
+    Num..Votes + You.rated + Year, data = moviejoin)
+
+yhat <- predict(fit)
+cbind(yhat, y = moviejoin$IMDb.Rating)
+
+
+
+
+mean((moviejoin$IMDb.Rating - yhat)^2)
+
+
+```
+
+```{R}
+# cross-validation of regression model here
+
+set.seed(1200)
+k = 5
+
+data <- moviejoin[sample(nrow(moviejoin)), ]
+folds <- cut(seq(1:nrow(moviejoin)), breaks = k, labels = F)
+
+diags <- NULL
+for (i in 1:k) {
+    train <- data[folds != i, ]
+    test <- data[folds == i, ]
+    
+    fit <- lm(IMDb.Rating ~ Runtime.x + Runtime.y + 
+    Num..Votes + You.rated + Year,
+        data = train)
+  
+    yhat <- predict(fit, newdata = test)
+    
+    diags <- mean((test$IMDb.Rating - yhat)^2)
+}
+
+mean(diags)
+
+```
+
+Discussion
+
+The linear regression resulted in a MSE of 0.208. This value is great and suggests our prediction error is very small. When compared to the CV, the resulted MSE value of 0.2331 suggests very small prediction error as well. 
+
+
+
+### Python 
+
+```{R}
+library(reticulate)
+
+use_python("/usr/bin/python3", required = F)
+Netflix <- "Netflix is"
+cat(c(Netflix, py$great))
+
+```
+
+```{python}
+# python code here
+
+great = 'Great!'
+print(r.Netflix, great) 
+
+
+```
+
+Discussion
+To create a "netflix is great" output, we defined Netflix as “Netflix is”. Next, we defined the variable great in python as “Great!”. The python variable life is accessed using the py$ syntax and the cat command should call “Netflix is Great!”. By grabbing variables from the different environments we were able to print a statment without any override from the r environment. 
+### Concluding Remarks
+
+Include concluding remarks here, if any
+
+I really enjoyed this class and I hope you have a great winter break! Thank You Dr.Woodward and TA's!
+
+
+
